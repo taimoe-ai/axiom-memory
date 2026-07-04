@@ -1,0 +1,57 @@
+# Server (full stack):  docker compose --profile full up -d --build
+# Local dev:            docker compose up -d          (compose.override.yaml
+#                       publishes Postgres on :5432 for pytest; the app is run
+#                       via `uv run`, not the container)
+#
+# The db port is intentionally NOT published here — on the server the app
+# reaches Postgres over the compose network, and nothing else should.
+services:
+  db:
+    # pgvector/pgvector = stock PostgreSQL + the vector extension (needed by
+    # migration 0005). Same major version, so the data volume carries over.
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: axiom
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-axiom}
+      POSTGRES_DB: axiom
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U axiom"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    restart: unless-stopped
+
+  app:
+    profiles: ["full"]
+    build: .
+    # Google OAuth (ChatGPT / claude.ai) + static service token for headless
+    # callers. The Cloudflare tunnel must forward the whole hostname — the
+    # OAuth flow needs /.well-known/*, /authorize, /token, /register and
+    # /auth/callback in addition to /mcp. Published on host :18080 to avoid
+    # colliding with other services on :8080.
+    command: ["axiom", "serve", "--transport", "http", "--host", "0.0.0.0"]
+    environment:
+      AXIOM_DATABASE_URL: postgresql://axiom:${POSTGRES_PASSWORD:-axiom}@db:5432/axiom
+      AXIOM_BASE_URL: ${AXIOM_BASE_URL:?set in .env}
+      AXIOM_GOOGLE_CLIENT_ID: ${AXIOM_GOOGLE_CLIENT_ID:?set in .env}
+      AXIOM_GOOGLE_CLIENT_SECRET: ${AXIOM_GOOGLE_CLIENT_SECRET:?set in .env}
+      AXIOM_ALLOWED_EMAILS: ${AXIOM_ALLOWED_EMAILS:?set in .env}
+      AXIOM_SERVICE_TOKEN: ${AXIOM_SERVICE_TOKEN:-}
+      AXIOM_GEMINI_API_KEY: ${AXIOM_GEMINI_API_KEY:-}
+      PORT: "8080"
+    ports:
+      - "18080:8080"
+    volumes:
+      # OAuth proxy state (client registrations, encrypted upstream tokens).
+      # Without this, every restart forces ChatGPT/Claude to re-authenticate.
+      - oauth_state:/root/.local/share/fastmcp
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  oauth_state:

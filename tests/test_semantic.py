@@ -1,0 +1,111 @@
+"""Semantic recall: vector similarity surfaces memories with zero lexical
+overlap, and every embedding failure degrades to lexical-only — never breaks."""
+
+import asyncpg
+import pytest
+
+from axiom.store import MemoryStore
+
+DIMS = 768
+
+
+def unit(*components: tuple[int, float]) -> list[float]:
+    vec = [0.0] * DIMS
+    for index, value in components:
+        vec[index] = value
+    return vec
+
+
+class FakeEmbedder:
+    """Maps substring keys to fixed vectors; unknown text embeds to None,
+    which is exactly what a failed API call looks like to the store."""
+
+    dims = DIMS
+
+    def __init__(self, vectors: dict[str, list[float]]):
+        self._vectors = vectors
+
+    async def embed(self, text: str, *, kind: str) -> list[float] | None:
+        for key, vec in self._vectors.items():
+            if key in text:
+                return vec
+        return None
+
+
+@pytest.fixture
+async def semantic_store(pool: asyncpg.Pool) -> MemoryStore:
+    await pool.execute("TRUNCATE memories, events")
+    embedder = FakeEmbedder(
+        {
+            # cos(query, interview-doc) = 0.8 — above the 0.55 floor.
+            "會議": unit((0, 1.0)),
+            "需求訪談": unit((0, 0.8), (1, 0.6)),
+            # Orthogonal to the query — semantic score 0.
+            "investment": unit((2, 1.0)),
+        }
+    )
+    return MemoryStore(
+        pool,
+        dedup_threshold=0.35,
+        recall_threshold=0.1,
+        embedder=embedder,  # type: ignore[arg-type] — duck-typed test double
+        semantic_floor=0.55,
+    )
+
+
+async def test_semantic_recall_hits_without_lexical_overlap(semantic_store: MemoryStore):
+    await semantic_store.remember(
+        name="client-discovery",
+        description="製造業客戶 AI Agent 導入案的需求訪談重點",
+        content="需求訪談:EIP 是否唯一入口、SSO 傳遞、第一期範圍。",
+        type="project",
+        source_app="test",
+    )
+    await semantic_store.remember(
+        name="investment-filters",
+        description="investment idea criteria",
+        content="Prioritize lower-priced public companies.",
+        type="preference",
+        source_app="test",
+        allow_duplicate=True,
+    )
+
+    # "meeting 會議" shares no words with the stored memory; only the vector
+    # path can surface it.
+    results = await semantic_store.recall("meeting 會議")
+    assert [m.name for m in results] == ["client-discovery"]
+
+
+async def test_recall_falls_back_to_lexical_when_query_embedding_fails(
+    semantic_store: MemoryStore,
+):
+    await semantic_store.remember(
+        name="investment-filters",
+        description="investment idea criteria",
+        content="Prioritize lower-priced public companies.",
+        type="preference",
+        source_app="test",
+    )
+    # "investment" matches lexically; the query embeds to None (unknown key
+    # minus the known substrings), so only the lexical path runs.
+    results = await semantic_store.recall("lower-priced investment")
+    assert [m.name for m in results] == ["investment-filters"]
+
+
+async def test_remember_survives_embedding_failure(semantic_store: MemoryStore, pool):
+    # No fake-embedder key matches → document embedding is None.
+    result = await semantic_store.remember(
+        name="unembeddable-memory",
+        description="stored while the embedding API was down",
+        content="Recall must still find this lexically.",
+        type="fact",
+        source_app="test",
+    )
+    assert result.status == "created"
+    stored = await pool.fetchval(
+        "SELECT embedding IS NULL FROM memories WHERE name = 'unembeddable-memory'"
+    )
+    assert stored is True
+
+    results = await semantic_store.recall("embedding API down")
+    assert [m.name for m in results] == ["unembeddable-memory"]
