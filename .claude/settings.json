@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__claude_ai_Axiom__list_memories",
+      "mcp__claude_ai_Axiom__review"
+    ]
+  }
+}
