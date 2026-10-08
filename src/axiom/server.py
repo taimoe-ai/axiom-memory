@@ -48,6 +48,7 @@ async def get_store() -> MemoryStore:
                 _store = MemoryStore(
                     pool,
                     dedup_threshold=settings.dedup_threshold,
+                    semantic_dedup_threshold=settings.semantic_dedup_threshold,
                     recall_threshold=settings.recall_threshold,
                     recall_half_life_days=settings.recall_half_life_days,
                     state_half_life_days=settings.state_half_life_days,
@@ -206,32 +207,46 @@ async def recall(
         ),
     ] = None,
     limit: Annotated[int, Field(ge=1, le=20)] = 5,
-) -> list[dict] | dict:
+) -> dict:
     """Search the user's long-term memory.
 
     Call this before answering anything that could depend on the user's
     preferences, projects, or past decisions. A result with possibly_stale=true
     is a `state` memory that has not been updated in a while — verify it with
     the user before relying on it, and re-`remember` it under the same name
-    once confirmed so it stops being flagged. On a miss, the full memory index
-    (names and descriptions) is returned instead — scan it and re-query with
-    matching keywords rather than concluding nothing is known.
+    once confirmed so it stops being flagged. `related` lists memories linked
+    from the matches — recall one by its name if it looks relevant. On a miss,
+    the nearest index entries (names and descriptions) are returned instead —
+    scan them and re-query with matching keywords rather than concluding
+    nothing is known.
     """
     store = await get_store()
     memories = await store.recall(query, category=category, limit=limit)
-    if memories:
-        return [m.model_dump(exclude={"score"}) for m in memories]
-    index = await store.list_all(category=category)
-    return {
-        "matches": [],
-        "note": (
-            "No direct hits. Below is the full memory index — if an entry looks "
-            "relevant, call recall again with keywords from its name or description."
-        ),
-        "index": [
-            {"name": m.name, "description": m.description, "category": m.category} for m in index
-        ],
-    }
+    if not memories:
+        nearest = await store.index_nearest(query, category=category)
+        return {
+            "matches": [],
+            "note": (
+                "No direct hits. Below are the nearest index entries — if one looks "
+                "relevant, call recall again with keywords from its name or description."
+            ),
+            "index": [
+                {"name": m.name, "description": m.description, "category": m.category}
+                for m in nearest
+            ],
+        }
+    # Expand `related` one hop: link targets the matches point at but that
+    # did not surface themselves, as index entries the caller can pull next.
+    hit_names = {m.name for m in memories}
+    linked = list(dict.fromkeys(n for m in memories for n in m.related if n not in hit_names))
+    result: dict = {"matches": [m.model_dump(exclude={"score"}) for m in memories]}
+    related = await store.summaries_by_names(linked)
+    if related:
+        result["related"] = [
+            {"name": r.name, "description": r.description, "category": r.category}
+            for r in related
+        ]
+    return result
 
 
 @mcp.tool
@@ -289,6 +304,7 @@ async def review() -> ReviewReport:
     return await store.consolidation_candidates(
         stale_state_days=settings.stale_state_days,
         zombie_days=settings.zombie_days,
+        zombie_max_use_count=settings.zombie_max_use_count,
         event_window_days=settings.event_window_days,
         event_min_count=settings.event_min_count,
     )

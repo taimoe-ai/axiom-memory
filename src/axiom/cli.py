@@ -35,7 +35,11 @@ async def _embed() -> None:
 
 
 async def _review(
-    stale_state_days: int, zombie_days: int, event_window_days: int, event_min_count: int
+    stale_state_days: int,
+    zombie_days: int,
+    zombie_max_use_count: int,
+    event_window_days: int,
+    event_min_count: int,
 ) -> None:
     from axiom.server import get_store
 
@@ -43,6 +47,7 @@ async def _review(
     report = await store.consolidation_candidates(
         stale_state_days=stale_state_days,
         zombie_days=zombie_days,
+        zombie_max_use_count=zombie_max_use_count,
         event_window_days=event_window_days,
         event_min_count=event_min_count,
     )
@@ -56,7 +61,7 @@ async def _review(
         for s in report.stale_state:
             print(f"  {s.since:%Y-%m-%d}  {s.name}")
     if report.zombies:
-        print(f"\nNever recalled ({len(report.zombies)}) — worth keeping?:")
+        print(f"\nBarely used ({len(report.zombies)}) — worth keeping?:")
         for z in report.zombies:
             print(f"  {z.since:%Y-%m-%d}  {z.name}")
     if report.recurring:
@@ -100,6 +105,9 @@ def main() -> None:
     )
     review.add_argument("--stale-state-days", type=int, default=settings.stale_state_days)
     review.add_argument("--zombie-days", type=int, default=settings.zombie_days)
+    review.add_argument(
+        "--zombie-max-use-count", type=int, default=settings.zombie_max_use_count
+    )
     review.add_argument("--event-window-days", type=int, default=settings.event_window_days)
     review.add_argument("--event-min-count", type=int, default=settings.event_min_count)
 
@@ -116,6 +124,7 @@ def main() -> None:
             _review(
                 args.stale_state_days,
                 args.zombie_days,
+                args.zombie_max_use_count,
                 args.event_window_days,
                 args.event_min_count,
             )

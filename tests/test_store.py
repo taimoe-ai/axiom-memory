@@ -307,6 +307,88 @@ async def test_remember_stores_and_updates_related(store: MemoryStore):
     assert updated.memory.related == ["axiom-goal", "axiom-decision-postgresql"]
 
 
+async def test_forget_scrubs_related_links(store: MemoryStore):
+    await store.remember(
+        name="axiom-goal",
+        description="Axiom goal",
+        content="Cross-app shared memory.",
+        type="project",
+        source_app="test",
+    )
+    await store.remember(
+        name="axiom-arch",
+        description="Axiom architecture",
+        content="Postgres is the source of truth.",
+        type="project",
+        source_app="test",
+        related=["axiom-goal"],
+    )
+    assert await store.forget("axiom-goal") is True
+
+    survivor = await store.get("axiom-arch")
+    assert survivor is not None
+    assert survivor.related == []
+
+
+async def test_index_nearest_is_bounded_and_ordered(store: MemoryStore):
+    await store.remember(
+        name="favorite-coffee",
+        description="Coffee preference",
+        content="Drinks oat milk lattes.",
+        type="fact",
+        source_app="test",
+    )
+    await store.remember(
+        name="axiom-project",
+        description="Axiom memory MCP server",
+        content="Side project: MCP memory server.",
+        type="project",
+        source_app="test",
+    )
+    await store.remember(
+        name="kube-notes",
+        description="kubernetes cluster notes",
+        content="Cluster configuration notes.",
+        type="fact",
+        source_app="test",
+    )
+    nearest = await store.index_nearest("coffee drinks", limit=2)
+    assert len(nearest) == 2
+    assert nearest[0].name == "favorite-coffee"
+
+
+async def test_zombies_include_barely_used_memories(store: MemoryStore, pool):
+    for name in ("barely-used", "well-used", "fresh-low-use"):
+        await store.remember(
+            name=name,
+            description=f"note {name}",
+            content=f"Content for {name}.",
+            type="fact",
+            source_app="test",
+            allow_duplicate=True,
+        )
+    # Old and surfaced only twice → zombie despite nonzero use_count.
+    await pool.execute(
+        "UPDATE memories SET created_at = now() - interval '100 days', "
+        "last_used_at = now() - interval '100 days', use_count = 2 "
+        "WHERE name = 'barely-used'"
+    )
+    # Old but genuinely used → not a zombie.
+    await pool.execute(
+        "UPDATE memories SET created_at = now() - interval '100 days', "
+        "last_used_at = now() - interval '100 days', use_count = 10 "
+        "WHERE name = 'well-used'"
+    )
+
+    report = await store.consolidation_candidates(
+        stale_state_days=90, zombie_days=60, zombie_max_use_count=2
+    )
+    zombie_names = {z.name for z in report.zombies}
+    assert "barely-used" in zombie_names
+    assert "well-used" not in zombie_names
+    assert "fresh-low-use" not in zombie_names
+
+
 async def test_forget(store: MemoryStore):
     await store.remember(
         name="to-be-deleted",

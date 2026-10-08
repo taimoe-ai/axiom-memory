@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     # Minimum trigram similarity for a new memory to be flagged as a
     # suspected duplicate of an existing one.
     dedup_threshold: float = 0.35
+    # Minimum embedding cosine similarity for the same flag — catches
+    # paraphrases and cross-language duplicates that share no trigrams.
+    # Far above the ~0.65 "related pair" calibration point on purpose:
+    # dedup must only fire on near-paraphrases, not neighbours.
+    semantic_dedup_threshold: float = 0.80
 
     # Minimum combined score (FTS rank or trigram word similarity) for a
     # memory to appear in recall results.
@@ -77,7 +82,11 @@ class Settings(BaseSettings):
 
     # `axiom review` consolidation report thresholds.
     stale_state_days: int = 90  # state memories untouched this long are flagged
-    zombie_days: int = 60  # never-recalled memories older than this are flagged
+    zombie_days: int = 60  # barely-used memories older than this are flagged
+    # use_count is bumped whenever recall *surfaces* a memory, whether or not
+    # the client used it, so it inflates. A memory at or below this count that
+    # also hasn't surfaced within zombie_days still counts as a zombie.
+    zombie_max_use_count: int = 2
 
     # Episodic events (log_event): weak ambient signals, never part of recall.
     # Trigram similarity for two events to count as the same pattern.

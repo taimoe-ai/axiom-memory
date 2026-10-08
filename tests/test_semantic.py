@@ -92,6 +92,57 @@ async def test_recall_falls_back_to_lexical_when_query_embedding_fails(
     assert [m.name for m in results] == ["investment-filters"]
 
 
+async def test_dedup_catches_cross_language_paraphrase(pool: asyncpg.Pool):
+    # An English memory and its Chinese restatement share no trigrams, so
+    # only the embedding screen can connect them. Both keys map to nearly
+    # the same direction: cos ≈ 0.98, above the 0.8 dedup threshold.
+    await pool.execute("TRUNCATE memories, events")
+    embedder = FakeEmbedder(
+        {
+            "oat milk": unit((0, 1.0)),
+            "燕麥奶": unit((0, 0.98), (1, 0.199)),
+        }
+    )
+    store = MemoryStore(
+        pool,
+        dedup_threshold=0.35,
+        recall_threshold=0.1,
+        embedder=embedder,  # type: ignore[arg-type] — duck-typed test double
+        semantic_dedup_threshold=0.80,
+    )
+    await store.remember(
+        name="coffee-preference",
+        description="Coffee order",
+        content="Always orders oat milk lattes.",
+        type="preference",
+        source_app="test",
+    )
+    result = await store.remember(
+        name="latte-choice",
+        description="咖啡偏好",
+        content="拿鐵都點燕麥奶。",
+        type="preference",
+        source_app="test",
+    )
+    assert result.status == "duplicate_suspected"
+    assert [m.name for m in result.similar] == ["coffee-preference"]
+
+    # The review report's duplicate pairs use the same embedding screen.
+    forced = await store.remember(
+        name="latte-choice",
+        description="咖啡偏好",
+        content="拿鐵都點燕麥奶。",
+        type="preference",
+        source_app="test",
+        allow_duplicate=True,
+    )
+    assert forced.status == "created"
+    report = await store.consolidation_candidates(stale_state_days=90, zombie_days=60)
+    assert frozenset(("coffee-preference", "latte-choice")) in {
+        frozenset((d.name_a, d.name_b)) for d in report.duplicates
+    }
+
+
 async def test_remember_survives_embedding_failure(semantic_store: MemoryStore, pool):
     # No fake-embedder key matches → document embedding is None.
     result = await semantic_store.remember(

@@ -82,7 +82,8 @@ class DuplicatePair(BaseModel):
 
 class StaleMemory(BaseModel):
     """A memory flagged for review, with the timestamp that triggered it
-    (last use / update for stale state, creation date for zombies)."""
+    (last use / update for stale state, last surfacing — or creation, if
+    never surfaced — for zombies)."""
 
     name: str
     type: MemoryType

@@ -47,9 +47,14 @@ class MemoryStore:
         event_retention_days: int = 180,
         embedder: GeminiEmbedder | None = None,
         semantic_floor: float = 0.55,
+        semantic_dedup_threshold: float = 0.80,
     ):
         self._pool = pool
         self._dedup_threshold = dedup_threshold
+        # Cosine similarity at which two memories count as saying the same
+        # thing. Deliberately far above the ~0.65 "related" calibration point:
+        # dedup must only fire on near-paraphrases, not on neighbours.
+        self._semantic_dedup_threshold = semantic_dedup_threshold
         self._recall_threshold = recall_threshold
         self._recall_half_life_days = recall_half_life_days
         self._state_half_life_days = state_half_life_days
@@ -107,7 +112,9 @@ class MemoryStore:
                 return RememberResult(status="updated", memory=Memory.from_row(updated))
 
             if not allow_duplicate:
-                similar = await self._find_similar(conn, f"{name} {description} {content}")
+                similar = await self._find_similar(
+                    conn, f"{name} {description} {content}", embedding
+                )
                 if similar:
                     return RememberResult(status="duplicate_suspected", similar=similar)
 
@@ -247,8 +254,18 @@ class MemoryStore:
         return Memory.from_row(row) if row else None
 
     async def forget(self, name: str) -> bool:
-        result = await self._pool.execute("DELETE FROM memories WHERE name = $1", name)
-        return result == "DELETE 1"
+        """Delete one memory and scrub its name from every other memory's
+        `related` list, so recall never points onward to a deleted entry."""
+        async with self._pool.acquire() as conn, conn.transaction():
+            result = await conn.execute("DELETE FROM memories WHERE name = $1", name)
+            if result != "DELETE 1":
+                return False
+            await conn.execute(
+                "UPDATE memories SET related = array_remove(related, $1) "
+                "WHERE $1 = ANY(related)",
+                name,
+            )
+            return True
 
     async def list_all(self, *, category: Category | None = None) -> list[MemorySummary]:
         if category is not None:
@@ -262,6 +279,46 @@ class MemoryStore:
                 "SELECT name, description, type, category, updated_at FROM memories "
                 "ORDER BY updated_at DESC"
             )
+        return [MemorySummary(**dict(r)) for r in rows]
+
+    async def index_nearest(
+        self, query: str, *, category: Category | None = None, limit: int = 25
+    ) -> list[MemorySummary]:
+        """The closest index entries to a query, with no relevance cutoff —
+        the fallback shown when recall misses. Bounded, unlike the full index,
+        so a miss costs the caller a fixed amount of context however large the
+        store grows."""
+        params: list = [query, limit]
+        category_filter = ""
+        if category is not None:
+            params.append(category)
+            category_filter = f"WHERE m.category = ${len(params)}"
+        rows = await self._pool.fetch(
+            f"""
+            SELECT m.name, m.description, m.type, m.category, m.updated_at
+            FROM memories m
+            {category_filter}
+            ORDER BY word_similarity($1, {_SEARCH_TEXT}) DESC, m.updated_at DESC
+            LIMIT $2
+            """,
+            *params,
+        )
+        return [MemorySummary(**dict(r)) for r in rows]
+
+    async def summaries_by_names(self, names: list[str]) -> list[MemorySummary]:
+        """Index entries for the given names (missing names are skipped),
+        in the order requested. Used to expand `related` links one hop."""
+        if not names:
+            return []
+        rows = await self._pool.fetch(
+            """
+            SELECT name, description, type, category, updated_at
+            FROM memories
+            WHERE name = ANY($1::text[])
+            ORDER BY array_position($1::text[], name)
+            """,
+            names,
+        )
         return [MemorySummary(**dict(r)) for r in rows]
 
     async def all_memories(self) -> list[Memory]:
@@ -374,27 +431,38 @@ class MemoryStore:
         *,
         stale_state_days: int,
         zombie_days: int,
+        zombie_max_use_count: int = 2,
         event_window_days: int = 30,
         event_min_count: int = 3,
     ) -> ReviewReport:
         """Surface memories worth a human's attention — the minimal, offline
         version of sleep-time consolidation. It only reports; it never edits or
         deletes. Four buckets: near-duplicate pairs (merge?), `state` memories
-        left untouched too long (still true?), memories never recalled since
-        they were stored (worth keeping?), and recurring episodic events
+        left untouched too long (still true?), memories that have barely ever
+        surfaced in recall (worth keeping?), and recurring episodic events
         (promote to a memory?)."""
+        # Lexical pairs catch same-wording duplicates; embedding pairs catch
+        # paraphrases and cross-language restatements the trigrams miss.
         dup_rows = await self._pool.fetch(
             f"""
             SELECT a.name AS name_a, b.name AS name_b,
-                   similarity({_SEARCH_TEXT.replace("m.", "a.")},
-                              {_SEARCH_TEXT.replace("m.", "b.")})::float8 AS similarity
+                   GREATEST(
+                       similarity({_SEARCH_TEXT.replace("m.", "a.")},
+                                  {_SEARCH_TEXT.replace("m.", "b.")}),
+                       CASE WHEN a.embedding IS NULL OR b.embedding IS NULL THEN 0
+                            ELSE 1 - (a.embedding <=> b.embedding)
+                       END
+                   )::float8 AS similarity
             FROM memories a
             JOIN memories b ON a.name < b.name
             WHERE similarity({_SEARCH_TEXT.replace("m.", "a.")},
                              {_SEARCH_TEXT.replace("m.", "b.")}) >= $1
+               OR (a.embedding IS NOT NULL AND b.embedding IS NOT NULL
+                   AND 1 - (a.embedding <=> b.embedding) >= $2)
             ORDER BY similarity DESC
             """,
             self._dedup_threshold,
+            self._semantic_dedup_threshold,
         )
         stale_rows = await self._pool.fetch(
             """
@@ -406,14 +474,21 @@ class MemoryStore:
             """,
             stale_state_days,
         )
+        # use_count counts every time recall *surfaced* a memory, not that a
+        # client actually used it, so it runs high: anything at or below the
+        # small allowance that also hasn't surfaced recently is effectively
+        # dead, not just the strictly-never-recalled.
         zombie_rows = await self._pool.fetch(
             """
-            SELECT name, type, category, created_at AS since
+            SELECT name, type, category, COALESCE(last_used_at, created_at) AS since
             FROM memories
-            WHERE use_count = 0 AND created_at < now() - ($1 * interval '1 day')
+            WHERE use_count <= $2
+              AND created_at < now() - ($1 * interval '1 day')
+              AND COALESCE(last_used_at, created_at) < now() - ($1 * interval '1 day')
             ORDER BY since
             """,
             zombie_days,
+            zombie_max_use_count,
         )
         return ReviewReport(
             duplicates=[DuplicatePair(**dict(r)) for r in dup_rows],
@@ -425,18 +500,34 @@ class MemoryStore:
         )
 
     async def _find_similar(
-        self, conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy, text: str
+        self,
+        conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+        text: str,
+        embedding: str | None,
     ) -> list[Memory]:
+        """Trigram screening catches lexical near-duplicates; the embedding
+        screen catches paraphrases and cross-language restatements (a Chinese
+        memory duplicating an English one shares no trigrams at all). Either
+        signal alone is enough to flag."""
         rows = await conn.fetch(
             f"""
             SELECT {_COLUMNS},
-                   similarity({_SEARCH_TEXT}, $1)::float8 AS score
+                   GREATEST(
+                       similarity({_SEARCH_TEXT}, $1),
+                       CASE WHEN $3::text IS NULL OR m.embedding IS NULL THEN 0
+                            ELSE 1 - (m.embedding <=> ($3::text)::vector)
+                       END
+                   )::float8 AS score
             FROM memories m
             WHERE similarity({_SEARCH_TEXT}, $1) >= $2
+               OR ($3::text IS NOT NULL AND m.embedding IS NOT NULL
+                   AND 1 - (m.embedding <=> ($3::text)::vector) >= $4)
             ORDER BY score DESC
             LIMIT 3
             """,
             text,
             self._dedup_threshold,
+            embedding,
+            self._semantic_dedup_threshold,
         )
         return [Memory.from_row(r) for r in rows]
