@@ -19,10 +19,14 @@ to. Paste the snippet below into each client:
 I use "axiom" (MCP) as my long-term memory, shared across all my AI apps.
 
 - Before answering anything that could depend on my preferences, my projects,
-  or decisions we've made before, call `recall` first with a few keywords.
+  contacts, or decisions we've made before, call `recall` first with a few keywords.
+  Pass `category` (`people`, `areas`, `you`, `topics`) to filter when the domain is clear.
 - When I state a durable fact, preference, or decision — or ask you to
   remember something — call `remember`. Distill it into one curated statement;
   never store conversation logs. Use absolute dates.
+  Assign `category`: `you` (profile, tastes, habits), `people` (colleagues, clients,
+  relationships), `areas` (projects, products, client accounts), or `topics`
+  (skills, guidelines, domain knowledge). If omitted it is inferred from type.
 - At the end of a substantial discussion, check whether it produced a durable
   decision, position, or plan — if yes, `remember` it.
 - For weak ambient signals — things I asked about or did that aren't durable
@@ -54,8 +58,8 @@ I use "axiom" (MCP) as my long-term memory, shared across all my AI apps.
 
 我用「axiom」(MCP) 當長期記憶，所有 AI 應用共用同一個大腦。
 
-- 回答涉及我的偏好、專案、過往決定的問題前，先用幾個關鍵字呼叫 recall。開始一項任務前也用任務描述 recall；回傳的 procedural 記憶是必須遵循的操作指令，不是背景知識。
-- 我陳述持久的事實、偏好、決定，或要你記住某事時，呼叫 remember：提煉成一句精煉陳述，絕不存對話記錄，日期寫絕對日期。有份量的討論結束時，若產出持久的結論或立場，也要 remember。
+- 回答涉及我的偏好、專案、人脈、過往決定的問題前，先用幾個關鍵字呼叫 recall（可選帶 category 篩選：people/areas/you/topics）。開始一項任務前也用任務描述 recall；回傳的 procedural 記憶是必須遵循的操作指令，不是背景知識。
+- 我陳述持久的事實、偏好、決定，或要你記住某事時，呼叫 remember：提煉成一句精煉陳述，絕不存對話記錄，日期寫絕對日期。分類 category 填：you（個人習慣/偏好）、people（同事/客戶/合作對象）、areas（專案/產品/長期業務）、topics（專業知識/工作法/規則）。有份量的討論結束時，若產出持久結論，也要 remember。
 - 微弱的環境訊號（問過的食譜、研究過的主題、準備過的會議）用一行短句 log_event。放心多用，它不會污染 recall，重複模式之後會升級成正式記憶。
 - 我糾正你「做事的方式」、或某個方法驗證有效值得重複時，存 type=procedural：內容寫 When:(觸發條件) Do:(步驟) Why:(一行理由，絕不可省)；description 寫成觸發語句。
 - remember 回傳 duplicate_suspected 時，沿用既有記憶的名稱去更新，除非真的是全新記憶。

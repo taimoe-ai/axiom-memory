@@ -10,6 +10,7 @@ import asyncpg
 
 from axiom.embeddings import GeminiEmbedder, to_pgvector
 from axiom.models import (
+    Category,
     DuplicatePair,
     Event,
     EventCluster,
@@ -26,7 +27,7 @@ _SEARCH_TEXT = "m.name || ' ' || m.description || ' ' || m.content"
 
 _COLUMNS = (
     "m.name, m.description, m.content, m.type, m.source_app, "
-    "m.created_at, m.updated_at, m.use_count, m.last_used_at, m.related"
+    "m.created_at, m.updated_at, m.use_count, m.last_used_at, m.related, m.category"
 )
 
 
@@ -70,18 +71,26 @@ class MemoryStore:
         description: str,
         content: str,
         type: MemoryType,
+        category: Category | None = None,
         source_app: str,
         related: list[str] | None = None,
         allow_duplicate: bool = False,
     ) -> RememberResult:
         related = related or []
+        if category is None:
+            if type == "preference":
+                category = "you"
+            elif type == "project":
+                category = "areas"
+            else:
+                category = "topics"
         embedding = await self._embed_memory(name, description, content)
         async with self._pool.acquire() as conn:
             updated = await conn.fetchrow(
                 f"""
                 UPDATE memories m
-                SET description = $2, content = $3, type = $4, source_app = $5,
-                    related = $6, embedding = $7::vector, updated_at = now()
+                SET description = $2, content = $3, type = $4, category = $5, source_app = $6,
+                    related = $7, embedding = $8::vector, updated_at = now()
                 WHERE m.name = $1
                 RETURNING {_COLUMNS}
                 """,
@@ -89,6 +98,7 @@ class MemoryStore:
                 description,
                 content,
                 type,
+                category,
                 source_app,
                 related,
                 embedding,
@@ -104,14 +114,15 @@ class MemoryStore:
             created = await conn.fetchrow(
                 f"""
                 INSERT INTO memories AS m
-                    (name, description, content, type, source_app, related, embedding)
-                VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
+                    (name, description, content, type, category, source_app, related, embedding)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector)
                 RETURNING {_COLUMNS}
                 """,
                 name,
                 description,
                 content,
                 type,
+                category,
                 source_app,
                 related,
                 embedding,
@@ -128,7 +139,13 @@ class MemoryStore:
         values = await self._embedder.embed(f"{name} {description} {content}", kind="document")
         return to_pgvector(values) if values is not None else None
 
-    async def recall(self, query: str, *, limit: int = 5) -> list[Memory]:
+    async def recall(
+        self,
+        query: str,
+        *,
+        category: Category | None = None,
+        limit: int = 5,
+    ) -> list[Memory]:
         """Rank by the strongest of full-text match, trigram word similarity
         (covers CJK and fuzzy matches), and — when an embedder is configured —
         semantic cosine similarity, then decay that relevance by recency: a
@@ -174,6 +191,12 @@ class MemoryStore:
         if query_vec is not None:
             params += [query_vec, self._semantic_floor]
 
+        if category is not None:
+            params.append(category)
+            category_filter = f"AND sub.category = ${len(params)}"
+        else:
+            category_filter = ""
+
         rows = await self._pool.fetch(
             f"""
             SELECT {_COLUMNS.replace("m.", "sub.")},
@@ -199,7 +222,7 @@ class MemoryStore:
                        ) AS recency
                 FROM memories m
             ) sub
-            WHERE sub.fts_hit OR sub.relevance >= $2
+            WHERE (sub.fts_hit OR sub.relevance >= $2) {category_filter}
             ORDER BY score DESC, sub.updated_at DESC
             LIMIT $3
             """,
@@ -227,14 +250,24 @@ class MemoryStore:
         result = await self._pool.execute("DELETE FROM memories WHERE name = $1", name)
         return result == "DELETE 1"
 
-    async def list_all(self) -> list[MemorySummary]:
-        rows = await self._pool.fetch(
-            "SELECT name, description, type, updated_at FROM memories ORDER BY updated_at DESC"
-        )
+    async def list_all(self, *, category: Category | None = None) -> list[MemorySummary]:
+        if category is not None:
+            rows = await self._pool.fetch(
+                "SELECT name, description, type, category, updated_at FROM memories "
+                "WHERE category = $1 ORDER BY updated_at DESC",
+                category,
+            )
+        else:
+            rows = await self._pool.fetch(
+                "SELECT name, description, type, category, updated_at FROM memories "
+                "ORDER BY updated_at DESC"
+            )
         return [MemorySummary(**dict(r)) for r in rows]
 
     async def all_memories(self) -> list[Memory]:
-        rows = await self._pool.fetch(f"SELECT {_COLUMNS} FROM memories m ORDER BY m.name")
+        rows = await self._pool.fetch(
+            f"SELECT {_COLUMNS} FROM memories m ORDER BY m.category, m.name"
+        )
         return [Memory.from_row(r) for r in rows]
 
     async def backfill_embeddings(self) -> tuple[int, int]:
@@ -280,9 +313,7 @@ class MemoryStore:
             )
             return Event(**dict(row))
 
-    async def recurring_events(
-        self, *, window_days: int, min_count: int
-    ) -> list[EventCluster]:
+    async def recurring_events(self, *, window_days: int, min_count: int) -> list[EventCluster]:
         """Cluster recent events by trigram similarity (single-link over
         similar pairs) and return clusters big enough to suggest a pattern.
         Volumes are personal-scale, so pairing in SQL and grouping in Python
@@ -367,7 +398,7 @@ class MemoryStore:
         )
         stale_rows = await self._pool.fetch(
             """
-            SELECT name, type, COALESCE(last_used_at, updated_at) AS since
+            SELECT name, type, category, COALESCE(last_used_at, updated_at) AS since
             FROM memories
             WHERE type = 'state'
               AND COALESCE(last_used_at, updated_at) < now() - ($1 * interval '1 day')
@@ -377,7 +408,7 @@ class MemoryStore:
         )
         zombie_rows = await self._pool.fetch(
             """
-            SELECT name, type, created_at AS since
+            SELECT name, type, category, created_at AS since
             FROM memories
             WHERE use_count = 0 AND created_at < now() - ($1 * interval '1 day')
             ORDER BY since

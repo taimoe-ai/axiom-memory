@@ -7,6 +7,7 @@ import asyncpg
 from pydantic import BaseModel, Field
 
 MemoryType = Literal["preference", "fact", "project", "state", "reference", "procedural"]
+Category = Literal["you", "people", "areas", "topics"]
 
 NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{1,63}$"
 
@@ -16,6 +17,7 @@ class Memory(BaseModel):
     description: str
     content: str
     type: MemoryType
+    category: Category = "areas"
     source_app: str
     created_at: datetime
     updated_at: datetime
@@ -39,6 +41,7 @@ class Memory(BaseModel):
             description=row["description"],
             content=row["content"],
             type=row["type"],
+            category=row.get("category", "areas"),
             source_app=row["source_app"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -56,6 +59,7 @@ class MemorySummary(BaseModel):
     name: str
     description: str
     type: MemoryType
+    category: Category
     updated_at: datetime
 
 
@@ -82,6 +86,7 @@ class StaleMemory(BaseModel):
 
     name: str
     type: MemoryType
+    category: Category = "areas"
     since: datetime
 
 

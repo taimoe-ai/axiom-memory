@@ -330,6 +330,70 @@ async def test_list_all(store: MemoryStore):
     )
     summaries = await store.list_all()
     assert [s.name for s in summaries] == ["a-memory"]
+    assert summaries[0].category == "topics"
+
+
+async def test_remember_category_assignment_and_inference(store: MemoryStore):
+    pref = await store.remember(
+        name="prefers-dark-mode",
+        description="Dark mode preference",
+        content="Prefers dark mode across all editors.",
+        type="preference",
+        source_app="test",
+    )
+    assert pref.memory is not None
+    assert pref.memory.category == "you"
+
+    proj = await store.remember(
+        name="acme-agent-pilot",
+        description="Acme Bank AI Agent",
+        content="Sales agent production pilot for Acme Bank.",
+        type="project",
+        source_app="test",
+    )
+    assert proj.memory is not None
+    assert proj.memory.category == "areas"
+
+    person = await store.remember(
+        name="dana-sales-lead",
+        description="Dana sales lead at Globex",
+        content="Dana is financial-industry sales lead at Globex.",
+        type="fact",
+        category="people",
+        source_app="test",
+    )
+    assert person.memory is not None
+    assert person.memory.category == "people"
+
+
+async def test_recall_and_list_filter_by_category(store: MemoryStore):
+    await store.remember(
+        name="dana-contact",
+        description="Dana contact at Globex",
+        content="Dana leads finance accounts at Globex.",
+        type="fact",
+        category="people",
+        source_app="test",
+    )
+    await store.remember(
+        name="dana-project-notes",
+        description="Notes for Dana project proposal",
+        content="Proposal document for Dana regarding GCP migration.",
+        type="fact",
+        category="areas",
+        source_app="test",
+    )
+
+    people_recall = await store.recall("Dana", category="people")
+    assert len(people_recall) == 1
+    assert people_recall[0].name == "dana-contact"
+
+    areas_recall = await store.recall("Dana", category="areas")
+    assert len(areas_recall) == 1
+    assert areas_recall[0].name == "dana-project-notes"
+
+    people_list = await store.list_all(category="people")
+    assert [s.name for s in people_list] == ["dana-contact"]
 
 
 async def test_export_writes_and_prunes(store: MemoryStore, tmp_path: Path):
@@ -338,6 +402,7 @@ async def test_export_writes_and_prunes(store: MemoryStore, tmp_path: Path):
         description="Stays",
         content="Content here.",
         type="fact",
+        category="topics",
         source_app="test",
     )
     (tmp_path / "stale-memory.md").write_text("old")
@@ -345,10 +410,12 @@ async def test_export_writes_and_prunes(store: MemoryStore, tmp_path: Path):
     count = await export_all(store, tmp_path)
 
     assert count == 1
-    assert (tmp_path / "kept-memory.md").exists()
+    assert (tmp_path / "topics" / "kept-memory.md").exists()
     assert not (tmp_path / "stale-memory.md").exists()
     index = (tmp_path / "MEMORY.md").read_text()
-    assert "[kept-memory](kept-memory.md)" in index
-    body = (tmp_path / "kept-memory.md").read_text()
+    assert "## Topics" in index
+    assert "[kept-memory](topics/kept-memory.md)" in index
+    body = (tmp_path / "topics" / "kept-memory.md").read_text()
     assert body.startswith("---\nname: kept-memory\n")
+    assert "category: topics\n" in body
     assert "Content here." in body

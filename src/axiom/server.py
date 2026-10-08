@@ -18,6 +18,7 @@ from axiom.db import create_pool, run_migrations
 from axiom.embeddings import GeminiEmbedder
 from axiom.models import (
     NAME_PATTERN,
+    Category,
     MemorySummary,
     MemoryType,
     RememberResult,
@@ -84,8 +85,10 @@ mcp = FastMCP(
     name="axiom",
     instructions=(
         "Axiom is the user's personal long-term memory, shared across all their "
-        "AI apps. Call `recall` before answering anything that could depend on "
-        "their preferences, ongoing projects, or past decisions. Call `remember` "
+        "AI apps. Memories are organized by lifecycle `type` (preference, fact, "
+        "project, state, reference, procedural) and thematic `category` (you, people, "
+        "areas, topics). Call `recall` before answering anything that could depend on "
+        "their preferences, ongoing projects, contacts, or past decisions. Call `remember` "
         "when the user states a durable fact, preference, or decision — store one "
         "curated fact per memory, never conversation logs. Call `log_event` for "
         "weak ambient signals (what they asked about or did) that aren't worth a "
@@ -130,6 +133,19 @@ async def remember(
             )
         ),
     ],
+    category: Annotated[
+        Category | None,
+        Field(
+            description=(
+                "Thematic category matching Claude's memory model: "
+                "'you' (user profile, communication preferences, personal habits), "
+                "'people' (colleagues, clients, collaborators, relationships), "
+                "'areas' (long-term projects, products, companies, ventures), "
+                "'topics' (domain expertise, workflows, guidelines, investing, technical stacks). "
+                "Optional; if omitted, automatically inferred from type."
+            )
+        ),
+    ] = None,
     related: Annotated[
         list[str],
         Field(
@@ -162,6 +178,7 @@ async def remember(
         description=description,
         content=content,
         type=type,
+        category=category,
         source_app=_client_name(ctx),
         related=related,
         allow_duplicate=allow_duplicate,
@@ -179,6 +196,15 @@ async def recall(
             )
         ),
     ],
+    category: Annotated[
+        Category | None,
+        Field(
+            description=(
+                "Optional filter by category: 'you', 'people', 'areas', or 'topics'. "
+                "Useful when searching specifically for people/contacts or project context."
+            )
+        ),
+    ] = None,
     limit: Annotated[int, Field(ge=1, le=20)] = 5,
 ) -> list[dict] | dict:
     """Search the user's long-term memory.
@@ -192,17 +218,19 @@ async def recall(
     matching keywords rather than concluding nothing is known.
     """
     store = await get_store()
-    memories = await store.recall(query, limit=limit)
+    memories = await store.recall(query, category=category, limit=limit)
     if memories:
         return [m.model_dump(exclude={"score"}) for m in memories]
-    index = await store.list_all()
+    index = await store.list_all(category=category)
     return {
         "matches": [],
         "note": (
             "No direct hits. Below is the full memory index — if an entry looks "
             "relevant, call recall again with keywords from its name or description."
         ),
-        "index": [{"name": m.name, "description": m.description} for m in index],
+        "index": [
+            {"name": m.name, "description": m.description, "category": m.category} for m in index
+        ],
     }
 
 
@@ -267,9 +295,14 @@ async def review() -> ReviewReport:
 
 
 @mcp.tool
-async def list_memories() -> list[MemorySummary]:
-    """List every memory (name, one-line description, type, last update) without
+async def list_memories(
+    category: Annotated[
+        Category | None,
+        Field(description=("Optional category filter: 'you', 'people', 'areas', or 'topics'.")),
+    ] = None,
+) -> list[MemorySummary]:
+    """List every memory (name, one-line description, type, category, last update) without
     bodies. Use to browse what is known, or when recall misses and you want to
     scan the index directly."""
     store = await get_store()
-    return await store.list_all()
+    return await store.list_all(category=category)
