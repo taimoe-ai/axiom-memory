@@ -5,7 +5,7 @@
 # published), keeps the last RETAIN_DAYS dumps, and deletes older ones.
 # Needs docker access, so install it in root's crontab, e.g.:
 #
-#   15 3 * * * /home/tim/axiom/scripts/backup.sh >> /var/log/axiom-backup.log 2>&1
+#   30 3 * * * /home/tim/axiom/scripts/backup.sh >> /var/log/axiom-backup.log 2>&1
 #
 # Restore into an empty database:
 #   docker compose exec -T db pg_restore -U axiom -d axiom --clean < FILE.dump
@@ -14,6 +14,9 @@
 # off the machine for protection against disk loss.
 
 set -euo pipefail
+
+# cron runs with a minimal PATH; snap-installed docker lives in /snap/bin.
+export PATH="$PATH:/usr/local/bin:/snap/bin"
 
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/axiom}"
