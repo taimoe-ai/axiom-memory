@@ -98,7 +98,10 @@ mcp = FastMCP(
         "when the user states a durable fact, preference, or decision — store one "
         "curated fact per memory, never conversation logs. Call `log_event` for "
         "weak ambient signals (what they asked about or did) that aren't worth a "
-        "curated memory yet."
+        "curated memory yet. Each ongoing project keeps one `<project>-overview` "
+        "memory (status with a date, decisions in force, abandoned approaches, open "
+        "items, key detail memories in `related`): `get` it first when asked where a "
+        "project stands, and update it after a substantial session on that project."
     ),
     auth=build_auth(get_settings()),
 )
