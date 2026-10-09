@@ -10,8 +10,12 @@
 # Restore into an empty database:
 #   docker compose exec -T db pg_restore -U axiom -d axiom --clean < FILE.dump
 #
-# These dumps live on the same disk as the database; copy BACKUP_DIR
-# off the machine for protection against disk loss.
+# Local dumps share a disk with the database, so for protection against
+# disk loss each dump is also copied to Cloud Storage when the project's
+# .env sets AXIOM_BACKUP_GCS_URI (e.g. gs://bucket/axiom/backups) and
+# AXIOM_BACKUP_GCS_CREDENTIALS (a service-account key file with write
+# access). Old objects there are not pruned: at ~1.5 MB a day the cost is
+# negligible; add a bucket lifecycle rule if that changes.
 
 set -euo pipefail
 
@@ -38,3 +42,16 @@ find "$BACKUP_DIR" -name 'axiom-*.dump' -mtime +"$RETAIN_DAYS" -delete
 find "$BACKUP_DIR" -name 'axiom-*.dump.partial' -mtime +1 -delete
 
 echo "$(date -u +%FT%TZ) backup ok: $target ($(du -h "$target" | cut -f1))"
+
+# Read just these two keys; .env holds secrets and is not shell-safe to source.
+env_value() {
+    grep -E "^$1=" "$PROJECT_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- || true
+}
+gcs_uri="${AXIOM_BACKUP_GCS_URI:-$(env_value AXIOM_BACKUP_GCS_URI)}"
+gcs_credentials="${AXIOM_BACKUP_GCS_CREDENTIALS:-$(env_value AXIOM_BACKUP_GCS_CREDENTIALS)}"
+
+if [[ -n "$gcs_uri" ]]; then
+    CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$gcs_credentials" \
+        gcloud storage cp "$target" "${gcs_uri%/}/$(basename "$target")" --quiet
+    echo "$(date -u +%FT%TZ) offsite ok: ${gcs_uri%/}/$(basename "$target")"
+fi
