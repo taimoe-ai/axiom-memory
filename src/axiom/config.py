@@ -51,11 +51,13 @@ class Settings(BaseSettings):
     # Minimum trigram similarity for a new memory to be flagged as a
     # suspected duplicate of an existing one.
     dedup_threshold: float = 0.35
-    # Minimum embedding cosine similarity for the same flag — catches
-    # paraphrases and cross-language duplicates that share no trigrams.
-    # Far above the ~0.65 "related pair" calibration point on purpose:
-    # dedup must only fire on near-paraphrases, not neighbours.
-    semantic_dedup_threshold: float = 0.80
+    # Optional embedding cosine threshold for the same flag, to catch
+    # paraphrases and cross-language duplicates that share no trigrams. Off
+    # (None) by default: on real data, sibling memories of one project (e.g.
+    # successive test rounds) score 0.85-0.96 doc-to-doc, so no threshold
+    # separates true duplicates from siblings — at 0.80, 1,335 of ~57k pairs
+    # were flagged and nearly every project write would bounce.
+    semantic_dedup_threshold: float | None = None
 
     # Minimum combined score (FTS rank or trigram word similarity) for a
     # memory to appear in recall results.
@@ -73,12 +75,18 @@ class Settings(BaseSettings):
     # months — so they outlast everything else in the ranking.
     procedural_half_life_days: float = 540.0
 
-    # Retrieval strengthening (ACT-R): recall score is multiplied by
-    # 1 + ln(1 + use_count) / use_count_dampening, so frequently used memories
-    # win ties without ever outranking a clearly better lexical/semantic match.
-    # Higher dampening = weaker frequency effect. At 4.0: 10 uses ≈ x1.6,
-    # 50 ≈ x2.0, 500 ≈ x2.6.
-    use_count_dampening: float = 4.0
+    # Recall ranks on lexical_weight * lexical + (1 - lexical_weight) * semantic
+    # (lexical alone when either side has no vector). Chosen by `axiom eval`
+    # on 48 labelled cases: 0.3 to 0.4 all score ~96% hit@5; taking the max of
+    # the two signals (the old ranking) scored 73%.
+    lexical_weight: float = 0.4
+
+    # Retrieval strengthening (ACT-R): when > 0, recall score is multiplied by
+    # 1 + ln(1 + use_count) / use_count_dampening. Off (0) by default:
+    # use_count counts every surfacing, not actual use, so the boost feeds
+    # back into itself — at the old default of 4.0, memories surfaced
+    # hundreds of times (x2.6) buried clearly better matches.
+    use_count_dampening: float = 0.0
 
     # `axiom review` consolidation report thresholds.
     stale_state_days: int = 90  # state memories untouched this long are flagged

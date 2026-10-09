@@ -1,4 +1,4 @@
-"""Command-line entry point: serve (stdio/http), export, migrate."""
+"""Command-line entry point: serve (stdio/http), export, migrate, embed, eval, review."""
 
 import argparse
 import asyncio
@@ -32,6 +32,14 @@ async def _embed() -> None:
     embedded, missing = await (await get_store()).backfill_embeddings()
     suffix = f"; {missing} still missing (API errors)" if missing else ""
     print(f"Embedded {embedded} memories{suffix}")
+
+
+async def _eval(cases_path: Path, k: int) -> None:
+    from axiom.evals import format_report, load_cases, run_eval
+    from axiom.server import get_store
+
+    report = await run_eval(await get_store(), load_cases(cases_path), k=k)
+    print(format_report(report))
 
 
 async def _review(
@@ -100,6 +108,12 @@ def main() -> None:
 
     sub.add_parser("embed", help="Backfill embeddings for memories missing a vector.")
 
+    evaluate = sub.add_parser(
+        "eval", help="Measure recall quality against a labelled case file (read-only)."
+    )
+    evaluate.add_argument("--cases", type=Path, default=Path("evals/recall_cases.toml"))
+    evaluate.add_argument("--k", type=int, default=5)
+
     review = sub.add_parser(
         "review", help="Report consolidation candidates (duplicates, stale, unused)."
     )
@@ -117,6 +131,8 @@ def main() -> None:
         asyncio.run(_migrate())
     elif args.command == "embed":
         asyncio.run(_embed())
+    elif args.command == "eval":
+        asyncio.run(_eval(args.cases, args.k))
     elif args.command == "export":
         asyncio.run(_export(args.out))
     elif args.command == "review":

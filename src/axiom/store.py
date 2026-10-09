@@ -41,25 +41,26 @@ class MemoryStore:
         recall_half_life_days: float = 180.0,
         state_half_life_days: float = 30.0,
         procedural_half_life_days: float = 540.0,
-        use_count_dampening: float = 4.0,
+        use_count_dampening: float = 0.0,
+        lexical_weight: float = 0.4,
         stale_state_days: int = 90,
         event_similarity: float = 0.3,
         event_retention_days: int = 180,
         embedder: GeminiEmbedder | None = None,
         semantic_floor: float = 0.55,
-        semantic_dedup_threshold: float = 0.80,
+        semantic_dedup_threshold: float | None = None,
     ):
         self._pool = pool
         self._dedup_threshold = dedup_threshold
         # Cosine similarity at which two memories count as saying the same
-        # thing. Deliberately far above the ~0.65 "related" calibration point:
-        # dedup must only fire on near-paraphrases, not on neighbours.
+        # thing; None disables the embedding screen (see config for why).
         self._semantic_dedup_threshold = semantic_dedup_threshold
         self._recall_threshold = recall_threshold
         self._recall_half_life_days = recall_half_life_days
         self._state_half_life_days = state_half_life_days
         self._procedural_half_life_days = procedural_half_life_days
         self._use_count_dampening = use_count_dampening
+        self._lexical_weight = lexical_weight
         self._stale_state_days = stale_state_days
         self._event_similarity = event_similarity
         self._event_retention_days = event_retention_days
@@ -113,7 +114,9 @@ class MemoryStore:
 
             if not allow_duplicate:
                 similar = await self._find_similar(
-                    conn, f"{name} {description} {content}", embedding
+                    conn,
+                    f"{name} {description} {content}",
+                    embedding if self._semantic_dedup_threshold is not None else None,
                 )
                 if similar:
                     return RememberResult(status="duplicate_suspected", similar=similar)
@@ -152,39 +155,32 @@ class MemoryStore:
         *,
         category: Category | None = None,
         limit: int = 5,
+        track_usage: bool = True,
     ) -> list[Memory]:
-        """Rank by the strongest of full-text match, trigram word similarity
+        """Match on the strongest of full-text match, trigram word similarity
         (covers CJK and fuzzy matches), and — when an embedder is configured —
-        semantic cosine similarity, then decay that relevance by recency: a
-        memory unused for a long time sinks in the ranking (but is never
-        filtered out). `state` memories decay faster; `procedural` ones decay
-        slower — skills stay valid even when unused. Retrieval also
-        strengthens (ACT-R): a log-dampened use_count factor lets frequently
-        recalled memories win ties without letting any memory ride frequency
-        past a clearly better match. Matching uses raw relevance, so decay
-        and strengthening only reorder. `state` memories past the stale
-        threshold come back flagged possibly_stale so callers verify before
-        relying on them. An embedding-API failure silently degrades to
-        lexical-only ranking; recall never breaks."""
+        semantic cosine similarity. Rank on a weighted blend of the lexical
+        and semantic signals rather than their maximum: trigram similarity
+        saturates at 1.0 for any long memory that mentions the query word
+        once, and taking the max then throws away the semantic signal that
+        tells such memories apart. The blend is decayed by recency: a memory
+        unused for a long time sinks in the ranking (but is never filtered
+        out). `state` memories decay faster; `procedural` ones decay slower —
+        skills stay valid even when unused. An optional log-dampened
+        use_count factor (ACT-R strengthening) is off by default: use_count
+        counts every time a memory was surfaced, so boosting on it feeds back
+        into itself and lets popular memories bury better matches. Decay and
+        strengthening only reorder. `state` memories past the stale threshold
+        come back flagged possibly_stale so callers verify before relying on
+        them. An embedding-API failure silently degrades to lexical-only
+        ranking; recall never breaks. track_usage=False skips the usage
+        bump, so offline evaluation leaves the usage signal untouched."""
         query_vec: str | None = None
         if self._embedder is not None:
             values = await self._embedder.embed(query, kind="query")
             if values is not None:
                 query_vec = to_pgvector(values)
 
-        # Cosine similarity below the floor scores zero; above it, rescaled to
-        # 0..1 so it shares a scale with the lexical scores (ts_rank / trigram).
-        semantic_expr = (
-            """,
-            CASE WHEN m.embedding IS NULL THEN 0::float8
-                 ELSE GREATEST(
-                     0::float8,
-                     (1 - (m.embedding <=> $9::vector))::float8 - $10::float8
-                 ) / (1::float8 - $10::float8)
-            END"""
-            if query_vec is not None
-            else ""
-        )
         params: list = [
             query,
             self._recall_threshold,
@@ -194,9 +190,23 @@ class MemoryStore:
             self._procedural_half_life_days,
             self._use_count_dampening,
             self._stale_state_days,
+            self._lexical_weight,
         ]
+        # Cosine similarity below the floor scores zero; above it, rescaled to
+        # 0..1 so it shares a scale with the lexical scores (ts_rank / trigram).
+        # NULL means "no semantic signal" — the memory, or the query, has no
+        # vector — and the blend falls back to lexical alone.
         if query_vec is not None:
             params += [query_vec, self._semantic_floor]
+            semantic_expr = """
+                CASE WHEN m.embedding IS NULL THEN NULL
+                     ELSE GREATEST(
+                         0::float8,
+                         (1 - (m.embedding <=> $10::vector))::float8 - $11::float8
+                     ) / (1::float8 - $11::float8)
+                END"""
+        else:
+            semantic_expr = "NULL::float8"
 
         if category is not None:
             params.append(category)
@@ -207,8 +217,14 @@ class MemoryStore:
         rows = await self._pool.fetch(
             f"""
             SELECT {_COLUMNS.replace("m.", "sub.")},
-                   (sub.relevance * sub.recency
-                    * (1 + ln(1 + sub.use_count) / $7::float8))::float8 AS score,
+                   (CASE WHEN sub.semantic IS NULL THEN sub.lexical
+                         ELSE $9::float8 * sub.lexical + (1 - $9::float8) * sub.semantic
+                    END
+                    * sub.recency
+                    * CASE WHEN $7::float8 > 0
+                           THEN 1 + ln(1 + sub.use_count) / $7::float8
+                           ELSE 1 END
+                   )::float8 AS score,
                    (sub.type = 'state'
                     AND sub.updated_at < now() - make_interval(days => $8::int)
                    ) AS possibly_stale
@@ -217,8 +233,9 @@ class MemoryStore:
                        m.search @@ websearch_to_tsquery('simple', $1) AS fts_hit,
                        GREATEST(
                            ts_rank(m.search, websearch_to_tsquery('simple', $1)),
-                           word_similarity($1, {_SEARCH_TEXT}){semantic_expr}
-                       )::float8 AS relevance,
+                           word_similarity($1, {_SEARCH_TEXT})
+                       )::float8 AS lexical,
+                       ({semantic_expr})::float8 AS semantic,
                        exp(
                            -ln(2)
                            * (extract(epoch FROM now()
@@ -229,7 +246,8 @@ class MemoryStore:
                        ) AS recency
                 FROM memories m
             ) sub
-            WHERE (sub.fts_hit OR sub.relevance >= $2) {category_filter}
+            WHERE (sub.fts_hit OR GREATEST(sub.lexical, COALESCE(sub.semantic, 0)) >= $2)
+                  {category_filter}
             ORDER BY score DESC, sub.updated_at DESC
             LIMIT $3
             """,
@@ -239,7 +257,7 @@ class MemoryStore:
         # Retrieval strengthens memory: bump usage for everything we surfaced.
         # The returned objects keep their pre-bump counts, which reflects the
         # state at recall time.
-        if memories:
+        if memories and track_usage:
             await self._pool.execute(
                 "UPDATE memories SET use_count = use_count + 1, last_used_at = now() "
                 "WHERE name = ANY($1::text[])",
@@ -441,15 +459,17 @@ class MemoryStore:
         left untouched too long (still true?), memories that have barely ever
         surfaced in recall (worth keeping?), and recurring episodic events
         (promote to a memory?)."""
-        # Lexical pairs catch same-wording duplicates; embedding pairs catch
-        # paraphrases and cross-language restatements the trigrams miss.
+        # Lexical pairs catch same-wording duplicates; embedding pairs, when
+        # the semantic screen is enabled, catch paraphrases and
+        # cross-language restatements the trigrams miss.
         dup_rows = await self._pool.fetch(
             f"""
             SELECT a.name AS name_a, b.name AS name_b,
                    GREATEST(
                        similarity({_SEARCH_TEXT.replace("m.", "a.")},
                                   {_SEARCH_TEXT.replace("m.", "b.")}),
-                       CASE WHEN a.embedding IS NULL OR b.embedding IS NULL THEN 0
+                       CASE WHEN $2::float8 IS NULL
+                                 OR a.embedding IS NULL OR b.embedding IS NULL THEN 0
                             ELSE 1 - (a.embedding <=> b.embedding)
                        END
                    )::float8 AS similarity
@@ -457,8 +477,9 @@ class MemoryStore:
             JOIN memories b ON a.name < b.name
             WHERE similarity({_SEARCH_TEXT.replace("m.", "a.")},
                              {_SEARCH_TEXT.replace("m.", "b.")}) >= $1
-               OR (a.embedding IS NOT NULL AND b.embedding IS NOT NULL
-                   AND 1 - (a.embedding <=> b.embedding) >= $2)
+               OR ($2::float8 IS NOT NULL
+                   AND a.embedding IS NOT NULL AND b.embedding IS NOT NULL
+                   AND 1 - (a.embedding <=> b.embedding) >= $2::float8)
             ORDER BY similarity DESC
             """,
             self._dedup_threshold,
@@ -505,10 +526,11 @@ class MemoryStore:
         text: str,
         embedding: str | None,
     ) -> list[Memory]:
-        """Trigram screening catches lexical near-duplicates; the embedding
-        screen catches paraphrases and cross-language restatements (a Chinese
-        memory duplicating an English one shares no trigrams at all). Either
-        signal alone is enough to flag."""
+        """Trigram screening catches lexical near-duplicates; the optional
+        embedding screen (embedding given) catches paraphrases and
+        cross-language restatements (a Chinese memory duplicating an English
+        one shares no trigrams at all). Either signal alone is enough to
+        flag."""
         rows = await conn.fetch(
             f"""
             SELECT {_COLUMNS},

@@ -7,3 +7,7 @@ __pycache__/
 exports/
 dist/
 .claude/settings.local.json
+
+# Real eval cases describe one person's memories; only the example is public.
+evals/*.toml
+!evals/recall_cases.example.toml

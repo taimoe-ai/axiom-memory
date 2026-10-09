@@ -1,0 +1,23 @@
+# Recall evaluation cases for `axiom eval`.
+#
+# Copy to evals/recall_cases.toml (gitignored — real cases describe your own
+# memories) and replace these with queries against your store. A case passes
+# when any name in `expect` appears in the top-k results; MRR rewards ranking
+# it first. `category` is an optional recall filter; `tag` groups the
+# per-bucket breakdown (e.g. lexical, cross-lingual, paraphrase).
+
+[[case]]
+query = "python dependency manager"
+expect = ["prefers-uv-over-pip"]
+tag = "lexical"
+
+[[case]]
+query = "套件管理工具"
+expect = ["prefers-uv-over-pip"]
+tag = "cross-lingual"
+
+[[case]]
+query = "who handles sales for banking clients"
+expect = ["dana-sales-lead"]
+category = "people"
+tag = "paraphrase"

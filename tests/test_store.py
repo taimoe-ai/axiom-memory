@@ -165,9 +165,14 @@ async def test_recall_decays_stale_memories(store: MemoryStore, pool):
     assert names.index("kube-fresh") < names.index("kube-stale")
 
 
-async def test_recall_strengthens_frequently_used(store: MemoryStore, pool):
-    # Same relevance, same age; the memory recalled many times before must
-    # outrank the never-used one (ACT-R base-level activation).
+async def test_recall_strengthens_frequently_used(pool):
+    # Same relevance, same age; with strengthening enabled, the memory
+    # recalled many times before must outrank the never-used one (ACT-R
+    # base-level activation). It is off by default; this checks the opt-in.
+    await pool.execute("TRUNCATE memories, events")
+    store = MemoryStore(
+        pool, dedup_threshold=0.35, recall_threshold=0.1, use_count_dampening=4.0
+    )
     for name in ("stack-used", "stack-fresh"):
         await store.remember(
             name=name,

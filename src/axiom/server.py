@@ -54,6 +54,7 @@ async def get_store() -> MemoryStore:
                     state_half_life_days=settings.state_half_life_days,
                     procedural_half_life_days=settings.procedural_half_life_days,
                     use_count_dampening=settings.use_count_dampening,
+                    lexical_weight=settings.lexical_weight,
                     stale_state_days=settings.stale_state_days,
                     event_similarity=settings.event_similarity,
                     event_retention_days=settings.event_retention_days,
