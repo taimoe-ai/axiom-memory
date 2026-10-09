@@ -20,16 +20,36 @@ mirror.
   MCP client talk to the same memory over streamable HTTP or local stdio.
 - **Curated, not logged** — `remember` stores one fact per record with
   server-side dedup screening; no conversation-log landfill.
-- **Hybrid recall** — full-text search + trigram + pgvector semantic similarity
-  (Gemini embeddings), decayed by recency. CJK-friendly. On a miss it returns
-  the full memory index so the caller can re-query.
+- **Hybrid recall** — ranks on a weighted blend of lexical match (full-text +
+  trigram) and pgvector semantic similarity (Gemini embeddings), decayed by
+  recency. CJK-friendly and cross-lingual. Long content is truncated in
+  results (`get` returns the full text); on a miss, recall returns the nearest
+  index entries so the caller can re-query.
+- **Typed and categorised** — each memory has a lifecycle `type` (preference,
+  fact, project, state, reference, procedural) that sets how fast it decays,
+  and a thematic `category` (you, people, areas, topics) to filter by. Stale
+  `state` memories come back flagged so the model re-checks them.
+- **Version history** — every content change and every `forget` snapshots the
+  previous version, so a bad overwrite by any client is recoverable through
+  `history`.
+- **Provenance** — a memory is either `stated` by you or `inferred` by an AI.
+  Inferred memories rank lower and come back labelled, so a guess is not
+  treated as a fact about you until you confirm it.
+- **Overviews** — by convention (see the client instructions), each ongoing
+  project keeps one `<project>-overview` memory and you keep one
+  `user-profile`, so "where does X stand" and "who am I talking to" are one
+  read instead of a pile of fragments.
 - **Episodic layer** — `log_event` captures cheap one-line ambient signals that
-  never enter recall; `axiom review` clusters recent events and surfaces
-  recurring patterns as candidates for promotion to a real memory.
-- **Graceful degradation** — no Gemini key? Recall is lexical-only and nothing
-  breaks.
+  never enter recall; `review` clusters recent events and surfaces recurring
+  patterns as candidates for promotion to a real memory, alongside
+  near-duplicates, stale state, and barely-used memories.
+- **Measurable** — `axiom eval` scores recall (hit@k, MRR) against your own
+  labelled queries, so ranking changes are tested instead of guessed.
+- **Graceful degradation** — no Gemini key, or the embedding API is slow?
+  Recall falls back to lexical-only and nothing breaks.
 - **Your data, portable** — `axiom export` dumps everything to markdown for a
-  git-friendly backup.
+  git-friendly mirror; `scripts/backup.sh` takes nightly database dumps,
+  optionally copied to Cloud Storage.
 - **Real auth** — Google OAuth (with Dynamic Client Registration for
   ChatGPT/claude.ai connectors) plus a static service token for headless
   callers, coexisting on the same endpoint.
@@ -43,13 +63,15 @@ Claude Code / Gemini CLI / any MCP client
    axiom MCP server  (FastMCP)
         │
         ▼
-   PostgreSQL  ──►  markdown export (git backup)
+   PostgreSQL  ──►  markdown export (git mirror), nightly pg_dump
    (hybrid recall: FTS + trigram + pgvector semantic
     similarity via Gemini embeddings, decayed by recency)
 ```
 
-MCP tools: `remember`, `recall`, `forget`, `list_memories`, `log_event`.
-CLI: `axiom serve`, `axiom export`, `axiom review`, `axiom embed`.
+MCP tools: `remember`, `recall`, `get`, `forget`, `history`, `list_memories`,
+`log_event`, `review`.
+CLI: `axiom serve`, `axiom migrate`, `axiom export`, `axiom embed`,
+`axiom review`, `axiom eval`.
 
 ## Quick start
 
@@ -65,7 +87,7 @@ uv run axiom serve            # stdio MCP server (migrations run on first call)
 Register with Claude Code (local stdio, no auth needed):
 
 ```sh
-claude mcp add axiom -- uv --directory /path/to/axiom run axiom serve
+claude mcp add axiom -- uv --directory /path/to/axiom-memory run axiom serve
 ```
 
 Then paste [instructions/USAGE.md](instructions/USAGE.md) into each client's
@@ -123,10 +145,45 @@ forwards `/.well-known/*`, `/authorize`, `/token`, `/register` and
 | `AXIOM_SERVICE_TOKEN` | Static bearer token for headless callers |
 | `AXIOM_GEMINI_API_KEY` | Enables semantic recall (768-dim Gemini embeddings); empty = lexical-only |
 | `POSTGRES_PASSWORD` | Database password (compose) |
+| `AXIOM_BACKUP_GCS_URI` / `AXIOM_BACKUP_GCS_CREDENTIALS` | Optional off-machine copy of each backup (see Backups) |
 
 All three OAuth variables must be set together; leave them empty for local
 stdio use, which needs no auth at all. After enabling `AXIOM_GEMINI_API_KEY`
 on an existing database, run `axiom embed` once to backfill vectors.
+
+Ranking and review thresholds (lexical/semantic weights, decay half-lives,
+truncation length, and so on) have defaults in `src/axiom/config.py`; each can
+be overridden with an `AXIOM_`-prefixed environment variable.
+
+### Backups
+
+Memories live in a named Docker volume, so they survive restarts and
+redeploys — but not `docker compose down -v` or a dead disk.
+`scripts/backup.sh` dumps the database with `pg_dump` and keeps the last 14
+days; run it nightly from root's crontab:
+
+```sh
+30 3 * * * /path/to/axiom-memory/scripts/backup.sh >> /var/log/axiom-backup.log 2>&1
+```
+
+Set `AXIOM_BACKUP_GCS_URI` (e.g. `gs://your-bucket/axiom/backups`) and
+`AXIOM_BACKUP_GCS_CREDENTIALS` (a service-account key file) in `.env` to also
+copy each dump to Cloud Storage with `gcloud`.
+
+## Evaluating recall
+
+Ranking is easy to break and hard to judge by eye. `axiom eval` runs a file of
+labelled queries against your store and reports hit@k and MRR, without
+touching usage counters:
+
+```sh
+cp evals/recall_cases.example.toml evals/recall_cases.toml   # then edit
+uv run axiom eval
+```
+
+Each case is a query plus the memory names a good recall should surface. Real
+case files describe your own memories, so `evals/*.toml` is gitignored apart
+from the example.
 
 ## Development
 

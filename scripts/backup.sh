@@ -5,7 +5,7 @@
 # published), keeps the last RETAIN_DAYS dumps, and deletes older ones.
 # Needs docker access, so install it in root's crontab, e.g.:
 #
-#   30 3 * * * /home/tim/axiom/scripts/backup.sh >> /var/log/axiom-backup.log 2>&1
+#   30 3 * * * /path/to/axiom-memory/scripts/backup.sh >> /var/log/axiom-backup.log 2>&1
 #
 # Restore into an empty database:
 #   docker compose exec -T db pg_restore -U axiom -d axiom --clean < FILE.dump
