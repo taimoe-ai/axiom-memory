@@ -1,4 +1,4 @@
-"""MCP surface: six tools over the memory store.
+"""MCP surface: the memory tools over the store.
 
 Tool docstrings double as prompts for the calling model — they carry the write
 discipline (one curated fact per memory, no conversation logs) so behavior does
@@ -21,6 +21,7 @@ from axiom.models import (
     Category,
     MemorySummary,
     MemoryType,
+    MemoryVersion,
     RememberResult,
     ReviewReport,
 )
@@ -281,11 +282,28 @@ async def log_event(
 async def forget(
     name: Annotated[str, Field(description="Exact name of the memory to delete.")],
 ) -> dict:
-    """Permanently delete one memory by name. Use when the user asks to forget
-    something or a memory is confirmed obsolete."""
+    """Delete one memory by name. Use when the user asks to forget something
+    or a memory is confirmed obsolete. Its final state stays in `history`,
+    so a mistaken forget can be undone."""
     store = await get_store()
     deleted = await store.forget(name)
     return {"deleted": deleted, "name": name}
+
+
+@mcp.tool
+async def history(
+    name: Annotated[str, Field(description="Exact name of the memory.")],
+) -> list[MemoryVersion]:
+    """List past versions of one memory, newest first — what it said before
+    each update, and its final state if it was forgotten.
+
+    Use when the user asks what a memory used to say, or when an update or
+    forget looks like a mistake. To restore a version, call `remember` with
+    the same name and that version's description, content, type, and
+    category; only do so after the user confirms.
+    """
+    store = await get_store()
+    return await store.history(name)
 
 
 @mcp.tool

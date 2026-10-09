@@ -169,7 +169,7 @@ async def test_recall_strengthens_frequently_used(pool):
     # Same relevance, same age; with strengthening enabled, the memory
     # recalled many times before must outrank the never-used one (ACT-R
     # base-level activation). It is off by default; this checks the opt-in.
-    await pool.execute("TRUNCATE memories, events")
+    await pool.execute("TRUNCATE memories, events, memory_versions")
     store = MemoryStore(
         pool, dedup_threshold=0.35, recall_threshold=0.1, use_count_dampening=4.0
     )

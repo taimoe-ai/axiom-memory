@@ -72,6 +72,22 @@ class RememberResult(BaseModel):
     similar: list[Memory] = []
 
 
+class MemoryVersion(BaseModel):
+    """A past version of a memory: what it said before an update replaced it,
+    or its final state before it was forgotten."""
+
+    name: str
+    description: str
+    content: str
+    type: MemoryType
+    category: Category
+    source_app: str
+    related: list[str] = []
+    written_at: datetime
+    superseded_at: datetime
+    reason: Literal["updated", "forgotten"]
+
+
 class DuplicatePair(BaseModel):
     """Two memories similar enough to be worth merging."""
 

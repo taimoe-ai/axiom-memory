@@ -39,5 +39,5 @@ async def pool() -> AsyncIterator[asyncpg.Pool]:
 
 @pytest.fixture
 async def store(pool: asyncpg.Pool) -> MemoryStore:
-    await pool.execute("TRUNCATE memories, events")
+    await pool.execute("TRUNCATE memories, events, memory_versions")
     return MemoryStore(pool, dedup_threshold=0.35, recall_threshold=0.1)

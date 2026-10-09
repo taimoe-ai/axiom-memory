@@ -17,6 +17,7 @@ from axiom.models import (
     Memory,
     MemorySummary,
     MemoryType,
+    MemoryVersion,
     RememberResult,
     ReviewReport,
     StaleMemory,
@@ -298,6 +299,23 @@ class MemoryStore:
                 "ORDER BY updated_at DESC"
             )
         return [MemorySummary(**dict(r)) for r in rows]
+
+    async def history(self, name: str, *, limit: int = 20) -> list[MemoryVersion]:
+        """Past versions of a memory, newest first — including the final state
+        of a forgotten one. Recorded by a database trigger (migration 0008)."""
+        rows = await self._pool.fetch(
+            """
+            SELECT name, description, content, type, category, source_app, related,
+                   written_at, superseded_at, reason
+            FROM memory_versions
+            WHERE name = $1
+            ORDER BY superseded_at DESC, id DESC
+            LIMIT $2
+            """,
+            name,
+            limit,
+        )
+        return [MemoryVersion(**{**dict(r), "related": list(r["related"])}) for r in rows]
 
     async def index_nearest(
         self, query: str, *, category: Category | None = None, limit: int = 25

@@ -34,7 +34,7 @@ class FakeEmbedder:
 
 @pytest.fixture
 async def semantic_store(pool: asyncpg.Pool) -> MemoryStore:
-    await pool.execute("TRUNCATE memories, events")
+    await pool.execute("TRUNCATE memories, events, memory_versions")
     embedder = FakeEmbedder(
         {
             # cos(query, interview-doc) = 0.8 — above the 0.55 floor.
@@ -97,7 +97,7 @@ async def test_semantic_signal_breaks_saturated_lexical_ties(pool: asyncpg.Pool)
     # each. Ranking on the max of the signals tied them and fell back to
     # recency, burying the real match under any long note that mentions the
     # name; the blend lets the semantic signal decide.
-    await pool.execute("TRUNCATE memories, events")
+    await pool.execute("TRUNCATE memories, events, memory_versions")
     embedder = FakeEmbedder(
         {
             "contact-card": unit((0, 0.9), (1, 0.436)),
@@ -134,7 +134,7 @@ async def test_dedup_catches_cross_language_paraphrase(pool: asyncpg.Pool):
     # An English memory and its Chinese restatement share no trigrams, so
     # only the embedding screen can connect them. Both keys map to nearly
     # the same direction: cos ≈ 0.98, above the 0.8 dedup threshold.
-    await pool.execute("TRUNCATE memories, events")
+    await pool.execute("TRUNCATE memories, events, memory_versions")
     embedder = FakeEmbedder(
         {
             "oat milk": unit((0, 1.0)),
@@ -185,7 +185,7 @@ async def test_semantic_dedup_is_off_by_default(pool: asyncpg.Pool):
     # Sibling memories of one project embed close together (successive test
     # rounds score ~0.9 on real data), so the embedding screen must not
     # bounce writes unless explicitly enabled.
-    await pool.execute("TRUNCATE memories, events")
+    await pool.execute("TRUNCATE memories, events, memory_versions")
     embedder = FakeEmbedder(
         {
             "round one": unit((0, 1.0)),
