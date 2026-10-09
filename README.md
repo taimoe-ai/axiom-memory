@@ -56,7 +56,7 @@ CLI: `axiom serve`, `axiom export`, `axiom review`, `axiom embed`.
 Requires [uv](https://docs.astral.sh/uv/) and Docker.
 
 ```sh
-git clone https://github.com/taimoe-ai/axiom && cd axiom
+git clone https://github.com/taimoe-ai/axiom-memory && cd axiom-memory
 docker compose up -d          # local Postgres (pgvector)
 cp .env.example .env
 uv run axiom serve            # stdio MCP server (migrations run on first call)
