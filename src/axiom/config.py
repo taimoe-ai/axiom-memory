@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     # rescaled to 0..1. Calibrated on real memories: related pairs ~0.65,
     # unrelated ~0.50.
     semantic_floor: float = 0.55
+    # Recall's query embedding gives up after this long and ranks lexically.
+    embedding_query_timeout_seconds: float = 3.0
+
+    # recall returns at most this many characters of each memory's content
+    # (flagged truncated); the `get` tool returns the full text.
+    recall_content_chars: int = 1500
 
     # Minimum trigram similarity for a new memory to be flagged as a
     # suspected duplicate of an existing one.

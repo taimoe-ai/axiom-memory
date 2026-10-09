@@ -16,11 +16,24 @@ _API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:embe
 
 
 class GeminiEmbedder:
-    def __init__(self, *, api_key: str, model: str, dims: int, timeout_seconds: float = 8.0):
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        dims: int,
+        timeout_seconds: float = 8.0,
+        query_timeout_seconds: float = 3.0,
+    ):
         self._api_key = api_key
         self._model = model
         self._dims = dims
+        # Query embeddings sit on recall's hot path, where waiting out a slow
+        # API costs every client more than falling back to lexical ranking.
+        # Document embeddings can wait longer: a miss leaves the memory
+        # without a vector until `axiom embed` backfills it.
         self._timeout = timeout_seconds
+        self._query_timeout = query_timeout_seconds
 
     @property
     def dims(self) -> int:
@@ -34,8 +47,9 @@ class GeminiEmbedder:
         requested dimensionality, so cosine similarity is a plain dot product.
         """
         task = "RETRIEVAL_QUERY" if kind == "query" else "RETRIEVAL_DOCUMENT"
+        timeout = self._query_timeout if kind == "query" else self._timeout
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
                     _API_URL.format(model=self._model),
                     headers={"x-goog-api-key": self._api_key},

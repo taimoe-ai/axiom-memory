@@ -34,6 +34,16 @@ class Memory(BaseModel):
     # before relying on it, and re-remember it to refresh.
     possibly_stale: bool = False
 
+    def payload(self, max_chars: int | None = None) -> dict:
+        """The memory as returned to MCP clients. With max_chars, long
+        content is cut and flagged truncated, so a few long memories in one
+        recall cannot flood the caller's context."""
+        payload = self.model_dump(exclude={"score"})
+        if max_chars is not None and len(self.content) > max_chars:
+            payload["content"] = self.content[:max_chars] + "…"
+            payload["truncated"] = True
+        return payload
+
     @classmethod
     def from_row(cls, row: asyncpg.Record) -> "Memory":
         return cls(

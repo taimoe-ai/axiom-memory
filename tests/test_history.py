@@ -1,6 +1,21 @@
 from axiom.store import MemoryStore
 
 
+async def test_payload_truncates_long_content(store: MemoryStore):
+    await _editor(store, "x" * 50)
+    memory = await store.get("current-editor")
+    assert memory is not None
+
+    cut = memory.payload(max_chars=20)
+    assert cut["content"] == "x" * 20 + "…"
+    assert cut["truncated"] is True
+    assert "score" not in cut
+
+    full = memory.payload()
+    assert full["content"] == "x" * 50
+    assert "truncated" not in full
+
+
 async def _editor(store: MemoryStore, content: str, *, source_app: str = "test") -> None:
     await store.remember(
         name="current-editor",

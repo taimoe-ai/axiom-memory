@@ -45,6 +45,7 @@ async def get_store() -> MemoryStore:
                         api_key=settings.gemini_api_key,
                         model=settings.embedding_model,
                         dims=settings.embedding_dims,
+                        query_timeout_seconds=settings.embedding_query_timeout_seconds,
                     )
                 _store = MemoryStore(
                     pool,
@@ -189,6 +190,19 @@ async def remember(
 
 
 @mcp.tool
+async def get(
+    name: Annotated[str, Field(description="Exact name of the memory.")],
+) -> dict:
+    """Fetch one memory in full by its exact name — for a recall result
+    flagged truncated, or a name seen in `related` or the index."""
+    store = await get_store()
+    memory = await store.get(name)
+    if memory is None:
+        return {"found": False, "name": name}
+    return {"found": True, "memory": memory.payload()}
+
+
+@mcp.tool
 async def recall(
     query: Annotated[
         str,
@@ -216,14 +230,17 @@ async def recall(
     preferences, projects, or past decisions. A result with possibly_stale=true
     is a `state` memory that has not been updated in a while — verify it with
     the user before relying on it, and re-`remember` it under the same name
-    once confirmed so it stops being flagged. `related` lists memories linked
-    from the matches — recall one by its name if it looks relevant. On a miss,
+    once confirmed so it stops being flagged. A result with truncated=true
+    carries only the start of its content — call `get` with its name when
+    the rest matters. `related` lists memories linked from the matches —
+    `get` one by its name if it looks relevant. On a miss,
     the nearest index entries (names and descriptions) are returned instead —
     scan them and re-query with matching keywords rather than concluding
     nothing is known.
     """
     store = await get_store()
     memories = await store.recall(query, category=category, limit=limit)
+    max_chars = get_settings().recall_content_chars
     if not memories:
         nearest = await store.index_nearest(query, category=category)
         return {
@@ -241,7 +258,7 @@ async def recall(
     # did not surface themselves, as index entries the caller can pull next.
     hit_names = {m.name for m in memories}
     linked = list(dict.fromkeys(n for m in memories for n in m.related if n not in hit_names))
-    result: dict = {"matches": [m.model_dump(exclude={"score"}) for m in memories]}
+    result: dict = {"matches": [m.payload(max_chars) for m in memories]}
     related = await store.summaries_by_names(linked)
     if related:
         result["related"] = [
