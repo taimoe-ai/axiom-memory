@@ -8,6 +8,9 @@ from pydantic import BaseModel, Field
 
 MemoryType = Literal["preference", "fact", "project", "state", "reference", "procedural"]
 Category = Literal["you", "people", "areas", "topics"]
+# stated: the user said it. inferred: an AI concluded it from indirect
+# evidence — ranks lower and should be confirmed before it is relied on.
+Provenance = Literal["stated", "inferred"]
 
 NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{1,63}$"
 
@@ -18,6 +21,7 @@ class Memory(BaseModel):
     content: str
     type: MemoryType
     category: Category = "areas"
+    provenance: Provenance = "stated"
     source_app: str
     created_at: datetime
     updated_at: datetime
@@ -52,6 +56,7 @@ class Memory(BaseModel):
             content=row["content"],
             type=row["type"],
             category=row.get("category", "areas"),
+            provenance=row.get("provenance", "stated"),
             source_app=row["source_app"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -91,6 +96,7 @@ class MemoryVersion(BaseModel):
     content: str
     type: MemoryType
     category: Category
+    provenance: Provenance = "stated"
     source_app: str
     related: list[str] = []
     written_at: datetime

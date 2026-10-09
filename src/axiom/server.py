@@ -22,6 +22,7 @@ from axiom.models import (
     MemorySummary,
     MemoryType,
     MemoryVersion,
+    Provenance,
     RememberResult,
     ReviewReport,
 )
@@ -57,6 +58,7 @@ async def get_store() -> MemoryStore:
                     procedural_half_life_days=settings.procedural_half_life_days,
                     use_count_dampening=settings.use_count_dampening,
                     lexical_weight=settings.lexical_weight,
+                    inferred_weight=settings.inferred_weight,
                     stale_state_days=settings.stale_state_days,
                     event_similarity=settings.event_similarity,
                     event_retention_days=settings.event_retention_days,
@@ -159,6 +161,19 @@ async def remember(
             )
         ),
     ] = [],  # noqa: B006 — FastMCP reads the default to build the schema.
+    provenance: Annotated[
+        Provenance | None,
+        Field(
+            description=(
+                "'stated' if the user said this directly; 'inferred' if you concluded "
+                "it from their behaviour, choices, or other indirect evidence (e.g. "
+                "they keep asking about X, so they probably care about X). Inferred "
+                "memories rank lower and are flagged so they get confirmed before "
+                "anyone relies on them. When the user confirms an inferred memory, "
+                "re-remember it with 'stated'. Omit on update to keep the current value."
+            )
+        ),
+    ] = None,
     allow_duplicate: Annotated[
         bool,
         Field(
@@ -185,6 +200,7 @@ async def remember(
         category=category,
         source_app=_client_name(ctx),
         related=related,
+        provenance=provenance,
         allow_duplicate=allow_duplicate,
     )
 
@@ -230,7 +246,10 @@ async def recall(
     preferences, projects, or past decisions. A result with possibly_stale=true
     is a `state` memory that has not been updated in a while — verify it with
     the user before relying on it, and re-`remember` it under the same name
-    once confirmed so it stops being flagged. A result with truncated=true
+    once confirmed so it stops being flagged. A result with
+    provenance='inferred' is an AI's conclusion, not something the user
+    said — treat it as a hypothesis and confirm it before acting on it or
+    presenting it as fact. A result with truncated=true
     carries only the start of its content — call `get` with its name when
     the rest matters. `related` lists memories linked from the matches —
     `get` one by its name if it looks relevant. On a miss,

@@ -87,6 +87,11 @@ class Settings(BaseSettings):
     # the two signals (the old ranking) scored 73%.
     lexical_weight: float = 0.4
 
+    # Recall score multiplier for memories an AI inferred rather than the
+    # user stated: they still surface, but a stated memory of similar
+    # relevance outranks them.
+    inferred_weight: float = 0.8
+
     # Retrieval strengthening (ACT-R): when > 0, recall score is multiplied by
     # 1 + ln(1 + use_count) / use_count_dampening. Off (0) by default:
     # use_count counts every surfacing, not actual use, so the boost feeds

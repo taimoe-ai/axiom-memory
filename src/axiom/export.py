@@ -20,6 +20,7 @@ def render_memory(memory: Memory) -> str:
         f"description: {json.dumps(memory.description, ensure_ascii=False)}\n"
         f"type: {memory.type}\n"
         f"category: {memory.category}\n"
+        f"provenance: {memory.provenance}\n"
         f"source_app: {memory.source_app}\n"
         f"created_at: {memory.created_at.isoformat()}\n"
         f"updated_at: {memory.updated_at.isoformat()}\n"

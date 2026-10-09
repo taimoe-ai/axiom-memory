@@ -18,6 +18,7 @@ from axiom.models import (
     MemorySummary,
     MemoryType,
     MemoryVersion,
+    Provenance,
     RememberResult,
     ReviewReport,
     StaleMemory,
@@ -28,7 +29,8 @@ _SEARCH_TEXT = "m.name || ' ' || m.description || ' ' || m.content"
 
 _COLUMNS = (
     "m.name, m.description, m.content, m.type, m.source_app, "
-    "m.created_at, m.updated_at, m.use_count, m.last_used_at, m.related, m.category"
+    "m.created_at, m.updated_at, m.use_count, m.last_used_at, m.related, m.category, "
+    "m.provenance"
 )
 
 
@@ -44,6 +46,7 @@ class MemoryStore:
         procedural_half_life_days: float = 540.0,
         use_count_dampening: float = 0.0,
         lexical_weight: float = 0.4,
+        inferred_weight: float = 0.8,
         stale_state_days: int = 90,
         event_similarity: float = 0.3,
         event_retention_days: int = 180,
@@ -62,6 +65,7 @@ class MemoryStore:
         self._procedural_half_life_days = procedural_half_life_days
         self._use_count_dampening = use_count_dampening
         self._lexical_weight = lexical_weight
+        self._inferred_weight = inferred_weight
         self._stale_state_days = stale_state_days
         self._event_similarity = event_similarity
         self._event_retention_days = event_retention_days
@@ -81,8 +85,13 @@ class MemoryStore:
         category: Category | None = None,
         source_app: str,
         related: list[str] | None = None,
+        provenance: Provenance | None = None,
         allow_duplicate: bool = False,
     ) -> RememberResult:
+        """Create or update one memory. provenance=None keeps an existing
+        memory's provenance on update (so a routine edit never silently
+        upgrades an inference to a stated fact) and means 'stated' on
+        create."""
         related = related or []
         if category is None:
             if type == "preference":
@@ -97,7 +106,8 @@ class MemoryStore:
                 f"""
                 UPDATE memories m
                 SET description = $2, content = $3, type = $4, category = $5, source_app = $6,
-                    related = $7, embedding = $8::vector, updated_at = now()
+                    related = $7, embedding = $8::vector,
+                    provenance = COALESCE($9, m.provenance), updated_at = now()
                 WHERE m.name = $1
                 RETURNING {_COLUMNS}
                 """,
@@ -109,6 +119,7 @@ class MemoryStore:
                 source_app,
                 related,
                 embedding,
+                provenance,
             )
             if updated is not None:
                 return RememberResult(status="updated", memory=Memory.from_row(updated))
@@ -125,8 +136,9 @@ class MemoryStore:
             created = await conn.fetchrow(
                 f"""
                 INSERT INTO memories AS m
-                    (name, description, content, type, category, source_app, related, embedding)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector)
+                    (name, description, content, type, category, source_app, related,
+                     embedding, provenance)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector, $9)
                 RETURNING {_COLUMNS}
                 """,
                 name,
@@ -137,6 +149,7 @@ class MemoryStore:
                 source_app,
                 related,
                 embedding,
+                provenance or "stated",
             )
             assert created is not None
             return RememberResult(status="created", memory=Memory.from_row(created))
@@ -171,7 +184,9 @@ class MemoryStore:
         use_count factor (ACT-R strengthening) is off by default: use_count
         counts every time a memory was surfaced, so boosting on it feeds back
         into itself and lets popular memories bury better matches. Decay and
-        strengthening only reorder. `state` memories past the stale threshold
+        strengthening only reorder, as does the inferred_weight discount on
+        memories an AI inferred rather than the user stated. `state` memories
+        past the stale threshold
         come back flagged possibly_stale so callers verify before relying on
         them. An embedding-API failure silently degrades to lexical-only
         ranking; recall never breaks. track_usage=False skips the usage
@@ -192,6 +207,7 @@ class MemoryStore:
             self._use_count_dampening,
             self._stale_state_days,
             self._lexical_weight,
+            self._inferred_weight,
         ]
         # Cosine similarity below the floor scores zero; above it, rescaled to
         # 0..1 so it shares a scale with the lexical scores (ts_rank / trigram).
@@ -203,8 +219,8 @@ class MemoryStore:
                 CASE WHEN m.embedding IS NULL THEN NULL
                      ELSE GREATEST(
                          0::float8,
-                         (1 - (m.embedding <=> $10::vector))::float8 - $11::float8
-                     ) / (1::float8 - $11::float8)
+                         (1 - (m.embedding <=> $11::vector))::float8 - $12::float8
+                     ) / (1::float8 - $12::float8)
                 END"""
         else:
             semantic_expr = "NULL::float8"
@@ -225,6 +241,7 @@ class MemoryStore:
                     * CASE WHEN $7::float8 > 0
                            THEN 1 + ln(1 + sub.use_count) / $7::float8
                            ELSE 1 END
+                    * CASE WHEN sub.provenance = 'inferred' THEN $10::float8 ELSE 1 END
                    )::float8 AS score,
                    (sub.type = 'state'
                     AND sub.updated_at < now() - make_interval(days => $8::int)
@@ -305,8 +322,8 @@ class MemoryStore:
         of a forgotten one. Recorded by a database trigger (migration 0008)."""
         rows = await self._pool.fetch(
             """
-            SELECT name, description, content, type, category, source_app, related,
-                   written_at, superseded_at, reason
+            SELECT name, description, content, type, category, provenance, source_app,
+                   related, written_at, superseded_at, reason
             FROM memory_versions
             WHERE name = $1
             ORDER BY superseded_at DESC, id DESC

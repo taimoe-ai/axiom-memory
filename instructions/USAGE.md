@@ -5,7 +5,7 @@ to. Paste the snippet below into each client:
 
 - **ChatGPT**: Settings → Personalization → Custom Instructions. **The field
   caps at 1500 characters** — the full English snippet does not fit; use the
-  compact Traditional Chinese version at the bottom of this file (~690 chars,
+  compact Traditional Chinese version at the bottom of this file (~1,020 chars,
   behaviourally equivalent).
 - **Claude Code / Claude Desktop**: `CLAUDE.md` (global: `~/.claude/CLAUDE.md`)
 - **Gemini CLI**: `~/.gemini/GEMINI.md`
@@ -45,6 +45,14 @@ I use "axiom" (MCP) as my long-term memory, shared across all my AI apps.
   reusing its name instead of creating a new one, unless it is genuinely new.
 - When I correct something you recalled, update the memory (`remember` with
   the same name) or delete it (`forget`).
+- When you conclude something about me that I didn't say outright (from my
+  behaviour, repeated questions, or choices), `remember` it with
+  `provenance: inferred`. A recalled memory with `provenance: inferred` is a
+  hypothesis — confirm it with me before relying on it, then re-`remember`
+  it with `provenance: stated`.
+- A recall result with `truncated: true` is cut short — call `get` with its
+  name when the rest matters. If an update or `forget` looks like a mistake,
+  `history` shows earlier versions; restore one only after I confirm.
 - A recalled memory with `possibly_stale: true` describes my setup as of a
   while ago — check with me whether it still holds before relying on it, and
   once confirmed, re-`remember` it under the same name so the flag clears.
@@ -64,5 +72,7 @@ I use "axiom" (MCP) as my long-term memory, shared across all my AI apps.
 - 我糾正你「做事的方式」、或某個方法驗證有效值得重複時，存 type=procedural：內容寫 When:(觸發條件) Do:(步驟) Why:(一行理由，絕不可省)；description 寫成觸發語句。
 - remember 回傳 duplicate_suspected 時，沿用既有記憶的名稱去更新，除非真的是全新記憶。
 - 我糾正你 recall 出的內容時，用同名 remember 更新，或用 forget 刪除。
+- 不是我親口說、而是你從我的行為或提問推論出的結論，remember 時帶 provenance=inferred。recall 到 inferred 的記憶只是假設，引用前先向我確認，確認後用同名 remember 改成 stated。
+- recall 結果帶 truncated: true 表示內容被截斷，需要全文時用 get 取。更新或 forget 疑似出錯時，用 history 查舊版，經我同意才還原。
 - 帶 possibly_stale: true 的記憶描述的是一段時間前的狀態——引用前先向我確認是否仍成立，確認後用同名 remember 重寫以解除標記。
 - 我要你檢視或整理記憶時，呼叫 review 並帶我走一遍報告。寫回的高階歸納必須在 related 引用來源記憶；未經我同意絕不 forget。
