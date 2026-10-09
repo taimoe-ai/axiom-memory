@@ -91,7 +91,9 @@ mcp = FastMCP(
     name="axiom",
     instructions=(
         "Axiom is the user's personal long-term memory, shared across all their "
-        "AI apps. Memories are organized by lifecycle `type` (preference, fact, "
+        "AI apps. At the start of a substantial conversation, `get` the memory named "
+        "`user-profile` (who the user is, how they think, how to work with them) and "
+        "keep it in mind throughout. Memories are organized by lifecycle `type` (preference, fact, "
         "project, state, reference, procedural) and thematic `category` (you, people, "
         "areas, topics). Call `recall` before answering anything that could depend on "
         "their preferences, ongoing projects, contacts, or past decisions. Call `remember` "

@@ -5,7 +5,7 @@ to. Paste the snippet below into each client:
 
 - **ChatGPT**: Settings → Personalization → Custom Instructions. **The field
   caps at 1500 characters** — the full English snippet does not fit; use the
-  compact Traditional Chinese version at the bottom of this file (~1,210 chars,
+  compact Traditional Chinese version at the bottom of this file (~1,380 chars — close to the cap,
   behaviourally equivalent).
 - **Claude Code / Claude Desktop**: `CLAUDE.md` (global: `~/.claude/CLAUDE.md`)
 - **Gemini CLI**: `~/.gemini/GEMINI.md`
@@ -18,6 +18,13 @@ to. Paste the snippet below into each client:
 
 I use "axiom" (MCP) as my long-term memory, shared across all my AI apps.
 
+- At the start of a substantial conversation, `get` the memory named
+  `user-profile`: who I am, how I think, patterns I've recognised in myself,
+  and how to work with me. Keep it in mind for the whole conversation. When
+  I state something that belongs there, update it (same name, under 1,400
+  characters). Personality traits you infer yourself go in a separate memory
+  with `provenance: inferred` until I confirm them. Keep sensitive details
+  (pay, health, finances) out of it — it is read in every conversation.
 - Before answering anything that could depend on my preferences, my projects,
   contacts, or decisions we've made before, call `recall` first with a few keywords.
   Pass `category` (`people`, `areas`, `you`, `topics`) to filter when the domain is clear.
@@ -73,6 +80,8 @@ I use "axiom" (MCP) as my long-term memory, shared across all my AI apps.
 ## Compact version (zh-TW, fits ChatGPT's 1500-character limit)
 
 我用「axiom」(MCP) 當長期記憶，所有 AI 應用共用同一個大腦。
+
+- 有份量的對話開始時，先 get 名為 user-profile 的記憶（我是誰、怎麼思考、我自己辨識出的模式、怎麼跟我合作），整段對話都記著。你自己推論出的性格特質另存一筆 provenance=inferred，經我確認才併入；薪資、健康、財務等敏感細節不放進 user-profile。
 
 - 回答涉及我的偏好、專案、人脈、過往決定的問題前，先用幾個關鍵字呼叫 recall（可選帶 category 篩選：people/areas/you/topics）。開始一項任務前也用任務描述 recall；回傳的 procedural 記憶是必須遵循的操作指令，不是背景知識。
 - 我陳述持久的事實、偏好、決定，或要你記住某事時，呼叫 remember：提煉成一句精煉陳述，絕不存對話記錄，日期寫絕對日期。分類 category 填：you（個人習慣/偏好）、people（同事/客戶/合作對象）、areas（專案/產品/長期業務）、topics（專業知識/工作法/規則）。有份量的討論結束時，若產出持久結論，也要 remember。
